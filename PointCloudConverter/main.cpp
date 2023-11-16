@@ -5,6 +5,7 @@
 
 
 #include <fstream>
+#include <iomanip>
 #include <string>
 #include <iostream>
 #include <list>
@@ -22,6 +23,16 @@ struct Vector3
     bool isEmpty() const
     {
 		return x == 0.f && y == 0.f && z == 0.f;
+	}
+
+	Vector3 operator+(const Vector3& v) const
+    {
+    	return Vector3{ x + v.x, y + v.y, z + v.z };
+	}
+
+	Vector3 operator-(const Vector3& v) const
+    {
+    	return Vector3{ x - v.x, y - v.y, z - v.z };
 	}
 };
 
@@ -67,9 +78,12 @@ std::vector<Vector3> readVertexData(const std::string& fileName)
 	return vertexDataRaw;
 }
 
-Bounds findBounds(std::vector<Vector3> vertexData)
+Bounds findBounds(const std::vector<Vector3>& vertexData)
 {
     Bounds b;
+
+	b.xmin = b.xmax = vertexData[0].x;
+	b.ymin = b.ymax = vertexData[0].y;
 
     for (auto v : vertexData)
     {
@@ -118,37 +132,65 @@ int main(int argc, char* argv[])
     std::string fileName = "vertexData.txt";
     std::vector<Vector3> vertexDataRaw = readVertexData(fileName);
 
+	/*std::ofstream outFile("vertexDataRaw.txt");
+	if (!outFile.is_open()) return 1;
+
 	for (int i = 0; i < vertexDataRaw.size(); i += 1000)
-		std::cout << vertexDataRaw[i].x << " " << vertexDataRaw[i].y << " " << vertexDataRaw[i].z << std::endl;
+		outFile << vertexDataRaw[i].x << " " << vertexDataRaw[i].y << " " << vertexDataRaw[i].z << "\n";
 
+	return 0;*/
 
-	return 0;
+	/*for (int i = 0; i < vertexDataRaw.size(); i+=10000)
+		std::cout << vertexDataRaw[i].x << " " << vertexDataRaw[i].y << " " << vertexDataRaw[i].z << std::endl;*/
+
+	const Vector3 offset = vertexDataRaw[0];
+
+	// Remove pivot
+	for (auto v : vertexDataRaw)
+	{
+		v = v - offset;
+	}
+
 
     Bounds bounds = findBounds(vertexDataRaw);
+	std::cout << std::fixed << std::setprecision(2) << "xmin " << bounds.xmin << " xmax " << bounds.xmax << " ymin " << bounds.ymin << " ymax " << bounds.ymax << std::endl;
+	std::cout << std::fixed << std::setprecision(2) << "xSize " << bounds.xSize << " ySize " << bounds.ySize << std::endl;
 
-    // Rows and columns, where each cell is a vector of points in that area
-    PointCloudGrid vertexList;
+	return 0;
+	
 
-    //---------------
-    //|  x| x |
-    //|   |x x|
-    //---------------
-    //|x  |   |
-    //|  x|x  | 
+	// Distance between each cell wall
+	int numSteps = 10;
+	/*int numStepsX = ceil(bounds.xSize / stepLength);
+	int numStepsY = ceil(bounds.ySize / stepLength);*/
 
+	//std::cout << numStepsX << " " << numStepsY << std::endl;
+
+	//// Rows and columns, where each cell is a vector of points in that area. Initialize empty cells.
+	PointCloudGrid pointCloudGrid(numSteps, std::vector<std::vector<Vector3>>(numSteps, std::vector<Vector3>()));
+
+	// The final grid containing one vertex per cell.
+	std::vector<std::vector<Vector3>> vertexGrid(numSteps, std::vector<Vector3>(numSteps, Vector3()));
+
+	//---------------
+	//|  x| x |
+	//|   |x x|
+	//---------------
+	//|x  |   |
+	//|  x|x  |
 
     // Put points into vertexList
     for (auto v : vertexDataRaw)
     {
-        int x = (v.x - bounds.xmin) / bounds.xSize;
-        int y = (v.y - bounds.ymin) / bounds.ySize;
+		std::cout << v.x << " - " << bounds.xmin << " / " << bounds.xSize << std::endl;
+        int x = static_cast<int>(ceil(v.x / bounds.xSize));
+        int y = static_cast<int>(ceil(v.y / bounds.ySize));
 
-        vertexList[x][y].emplace_back(v);
+		std::cout << x << std::endl;
+        //pointCloudGrid[x][y].emplace_back(v);
     }
 
 
-    // How many rows and columns we want
-    float stepLength = 10.f;
 
     
     /*for (float y = bounds.ymin; y < bounds.ymax; y += stepLength)
