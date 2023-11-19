@@ -1,8 +1,10 @@
 // PointCloudConverter
 //
+// https://github.com/henriksen-marcus/PointCloudConverter
+//
 // This console application generates a triangulation based on a text file containing 3D point cloud data.
-// It groups the points into cells, and generates a vertex for each cell. It then generates indices for the
-// triangles. It outputs a text file with vertex, and a text file with index and neighbor data.
+// It groups the points into cells, and generates a common vertex for each cell. It then generates indices for
+// the triangles. It outputs a text file with vertex data, and a text file with index and neighbor data.
 
 
 #include <chrono>
@@ -10,11 +12,18 @@
 #include <iomanip>
 #include <string>
 #include <iostream>
-#include <sstream>
 #include <vector>
+#include "Timer.h"
 
-#define DECIMAL_PRECISION 4
+
+static constexpr int DECIMAL_PRECISION = 4;
 #define SET_PRECISION std::fixed << std::setprecision(DECIMAL_PRECISION)
+
+// Distance between each cell wall. Configure this to change the output mesh resolution.
+static constexpr float STEP_LENGTH = 5.f;
+
+// Flip the y and z coordinates on export. Useful when exporting to e.g. Unity. 
+static constexpr bool FLIP_YZ = true;
 
 
 struct Bounds
@@ -25,21 +34,6 @@ struct Bounds
 struct Vector3
 {
     float x{}, y{}, z{};
-
-    bool isEmpty() const
-    {
-		return x == 0.f && y == 0.f && z == 0.f;
-	}
-
-	Vector3 operator+(const Vector3& v) const
-    {
-    	return Vector3{ x + v.x, y + v.y, z + v.z };
-	}
-
-	Vector3 operator-(const Vector3& v) const
-    {
-    	return Vector3{ x - v.x, y - v.y, z - v.z };
-	}
 };
 
 /* In case of a cell not containing any vertices, we apply the
@@ -80,11 +74,14 @@ void exportVertexData(const std::vector<std::vector<Vector3>>& vertexData, const
 	if (!file.is_open())
 		throw std::runtime_error("Could not open the created file.");
 
-	file << vertexData.size() * vertexData.size() << "\n";
+	file << vertexData.size() * vertexData[0].size() << "\n";
 
 	for (const auto& i : vertexData)
 		for (const auto& j : i)
-			file << SET_PRECISION << j.x << " " << j.z << " " << j.y << "\n";
+			if (FLIP_YZ)
+				file << SET_PRECISION << j.x << " " << j.z << " " << j.y << "\n";
+			else
+				file << SET_PRECISION << j.x << " " << j.y << " " << j.z << "\n";
 
 	file.close();
 }
@@ -111,6 +108,9 @@ void exportIndexData(const std::vector<int>& indexData, const std::string& fileN
  */
 Bounds findBounds(const std::vector<Vector3>& vertexData)
 {
+	if (vertexData.empty())
+		throw std::runtime_error("Input vector is empty");
+
     Bounds b;
 
 	b.xmin = b.xmax = vertexData[0].x;
@@ -149,7 +149,7 @@ float getHeight(const PointCloudGrid& grid, int x, int y)
 		const auto& cell = grid[x][y];
 		if (cell.empty())
 		{
-			std::cout << "Cell empty.\n";
+			//std::cout << "Cell empty.\n";
 			return lastHeight;
 		}
 
@@ -158,7 +158,6 @@ float getHeight(const PointCloudGrid& grid, int x, int y)
 			zSum += v.z;
 
 		float height = zSum /= cell.size();
-		lastHeight = height;
 
 		return height;
 	}
@@ -170,18 +169,22 @@ float getHeight(const PointCloudGrid& grid, int x, int y)
 /**
  * \brief Merge vertices in each cell into one vertex placed in the top left, with the average height.
  * \param grid The point cloud grid.
+ * \param stepLength The distance between each cell wall.
  * \return A grid containing one vertex per cell.
  */
-std::vector<std::vector<Vector3>> mergeVertices(const PointCloudGrid& grid, float stepLengthX, float stepLengthY)
+std::vector<std::vector<Vector3>> mergeVertices(const PointCloudGrid& grid, float stepLength)
 {
 	// Initialize a grid containing one vertex per cell.
-	std::vector<std::vector<Vector3>> vertexGrid(grid.size(), std::vector<Vector3>(grid.size(), Vector3()));
+	std::vector<std::vector<Vector3>> vertexGrid(grid.size(), std::vector<Vector3>(grid[0].size(), Vector3()));
 
 	for (int x = 0; x < grid.size(); x++)
 	{
 		for (int y = 0; y < grid[0].size(); y++)
 		{
-			vertexGrid[x][y] = { x * stepLengthX, y * stepLengthY, getHeight(grid, x, y) };
+			const float height = getHeight(grid, x, y);
+			lastHeight = height;
+
+			vertexGrid[x][y] = { x * stepLength, y * stepLength, height };
 		}
 	}
 
@@ -208,7 +211,8 @@ void thinData(const std::string& inFile, const std::string& outFile, int skipLin
 
 	std::cout << "Begin thinning data\n";
 
-	auto start = std::chrono::high_resolution_clock::now();
+	Timer timer;
+	timer.Start();
 
 	while (std::getline(in, line))
 	{
@@ -218,22 +222,29 @@ void thinData(const std::string& inFile, const std::string& outFile, int skipLin
 			std::getline(in, line);
 	}
 
-	auto end = std::chrono::high_resolution_clock::now(); // Record end time
-	std::chrono::duration<double> duration = end - start;
-
-	std::cout << "End thinning data\n";
-	std::cout << "Time taken: " << duration.count() << " seconds" << std::endl;
+	std::cout << "End thinning data. Time taken: " << timer.Stop() << " seconds\n";
 }
 
+/**
+ * \brief Generates triangle index information and neighbor
+ * information for the given vertex grid.
+ * \param vertexData A grid of vertices.
+ * \return A compiled list of indices and neighbors for each triangle.
+ * Six lines per triangle, where the first three lines are the indices.
+ */
 std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertexData)
 {
-	std::vector<int> indices;
+	std::vector<std::vector<int>> indices;
+	std::vector<std::vector<int>> neighbors;
 
 	// Number of vertices in the x direction.
 	int n_x = vertexData.size();
 
 	// Number of vertices in the y direction.
 	int n_y = vertexData[0].size();
+
+	Timer t;
+	t.Start();
 
 	// X
 	for (int i = 0; i < vertexData.size(); i++)
@@ -279,58 +290,155 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			 */
 
 			// Triangle 0
-			indices.emplace_back(top_left);
-			indices.emplace_back(bottom_left);
-			indices.emplace_back(bottom_right);
+			std::vector<int> triangle;
+			triangle.emplace_back(top_left);
+			triangle.emplace_back(bottom_left);
+			triangle.emplace_back(bottom_right);
+
+			indices.emplace_back(triangle);
 
 			// Triangle 1
-			indices.emplace_back(top_left);
-			indices.emplace_back(bottom_right);
-			indices.emplace_back(top_right);
+			triangle.clear();
+			triangle.emplace_back(top_left);
+			triangle.emplace_back(bottom_right);
+			triangle.emplace_back(top_right);
 
+			indices.emplace_back(triangle);
+
+			continue;
 			//std::cout << "top_left: " << top_left << "\nbottom_left: " << bottom_left << "\nbuttom_right: " << buttom_right << "\ntop_right: " << top_right << std::endl;
+
+			/*
+			 * Generating neighbor data: Overview of the indices for each triangle in the grid.
+			 *
+			 * T is our current triangle.
+			 *
+			 * To generate neighbor information, we take the opposite triangle
+			 * index of the vertex that we are on. For example, the first neighbor
+			 * for triangle T is T0, which is on the opposite side of the first vertex
+			 * (marked with an x) which is on the top left of the square.
+			 *
+			 * The second neighbor is T1, which is on the opposite side of the second vertex.
+			 * Finally the third neighbor is T2, which is on the opposite side of the third vertex.
+			 *
+			 * The neighbor data should then be formatted like this: T0 T1 T2
+			 * Where the T's represent the index of the triangle in the indices array.
+			 *
+			 * If a neighbor doesn't exist (out of bounds in indices array), we set it to -1.
+			 *
+			 * -|---|---|---|-
+			 *  |\  |\  |\  |
+			 *  | \ | \ | \ |
+			 *  |  \|T4\|  \|
+			 * -|---x---|---|-
+			 *  |\T2|\T1|\  |
+			 *  | \ | \ | \ |
+			 *  |  \|T \|T3\|
+			 * -|---|---|---|-
+			 *  |\  |\T0|\  |
+			 *  | \ | \ | \ |
+			 *  |  \|  \|  \|
+			 * -|---|---|---|-
+			 */
+
+			constexpr int one_step_down = 2;
+			const int one_step_right = 2 * (n_y - 1);
+
+			// Current triangle index (in the indices array)
+			int T = 2 * (j + i * (n_y - 1));
+
+			int T0 = T + one_step_down + 1; // Second triangle in next square
+			int T1 = T + 1; // Next triangle
+			int T2 = T - one_step_right + 1; // Second triangle in previous column the our left
+			int T3 = T + one_step_right; // First triangle in next column to our right
+			int T4 = T - one_step_down;
+
+			neighbors.emplace_back();
+			auto& tri_neighbors = neighbors.back();
+
+			// Add neighbor data for the first triangle
+
+			// Check if the neighbor exists
+
+			/* If the j vertex we are on is more than or equal to the one before the last, then there won't be a T0 triangle.
+			 * Similarly, if our i is 0, there won't be a T2 triangle. */
+
+			/* If our y index is equal or more than the number of vertices
+			 * in the y direction minus one, there won't be a T0 triangle. */
+			tri_neighbors.emplace_back(j < (n_y - 1) ? T0 : -1);
+
+			tri_neighbors.emplace_back(T1);
+
+			// If our x index is 0, there won't be a T2 triangle.
+			tri_neighbors.emplace_back(i > 0 ? T2 : -1);
+
+
+			neighbors.emplace_back();
+			tri_neighbors = neighbors.back();
+
+			// If our x index is equal or more than the number of vertices in the x direction minus one, there won't be a T3 triangle.
+			tri_neighbors.emplace_back(i < (n_x - 1) ? T3 : -1);
+
+			// If our y index is 0, there won't be a T4 triangle.
+			tri_neighbors.emplace_back(j > 0 ? T4 : -1);
+
+			tri_neighbors.emplace_back(T);
 		}
 	}
 
-	return indices;
+	t.Println();
+
+	std::vector<int> merged;
+	/*
+	for (int i = 0; i < indices.size(); i++)
+	{
+		merged.insert(merged.end(), indices[i].begin(), indices[i].end());
+		merged.insert(merged.end(), neighbors[i].begin(), neighbors[i].end());
+	}	
+
+	return merged;*/
+
+	for (const auto& tri : indices)
+	{
+		merged.insert(merged.end(), tri.begin(), tri.end());
+	}
+
+	return merged;
 }
 
 int main()
 {
 	std::cout << "Point Cloud Converter\n";
 
-    std::string fileName = "thinnedVertexData.txt";
+    std::string fileName = "sampleData.txt";
 	std::vector<Vector3> vertexDataRaw = readVertexData(fileName);
 
-	//thinData(fileName, "thinnedVertexData.txt", 1000);
+	//thinData(fileName, "thinnedVertexData.txt", 500);
 	//return 0;
 
-	/*for (int i = 0; i < vertexDataRaw.size(); i+=10000)
-		std::cout << vertexDataRaw[i].x << " " << vertexDataRaw[i].y << " " << vertexDataRaw[i].z << std::endl;*/
-
-	const Vector3 offset = vertexDataRaw[0];
+	Bounds bounds = findBounds(vertexDataRaw);
+	//const Vector3 offset = vertexDataRaw[0];
 
 	// Remove world offset
 	for (auto& v : vertexDataRaw)
-		v = v - offset;
+	{
+		v.x -= bounds.xmin;
+		v.y -= bounds.ymin;
+		v.z -= bounds.zmin;
+	}
 
-	Bounds bounds = findBounds(vertexDataRaw);
+	bounds = findBounds(vertexDataRaw);
 
 	std::cout << "Data bounds:\n";
 	std::cout << SET_PRECISION << "xmin: " << bounds.xmin << " xmax: " << bounds.xmax << "\nymin: " << bounds.ymin << " ymax: " << bounds.ymax << "\n";
-	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << "\n";
+	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << "\n\n";
 
 	// Number of cells in each direction. Determines output vertex resolution.
-	const int numCells = 20;
-
-	/* Distance between each cell wall.
-	 * Calculate the step length so that the number of steps is equal in
-	 * both directions, and that it fits perfectly into the bounds. */
-	float stepLengthX = bounds.xSize / (numCells - 1);
-	float stepLengthY = bounds.ySize / (numCells - 1);
+	const int numCellsX = static_cast<int>(ceil(bounds.xSize / STEP_LENGTH)+1);
+	const int numCellsY = static_cast<int>(ceil(bounds.ySize / STEP_LENGTH)+1);
 
 	// Rows and columns, where each cell is a vector of points in that area. Initialize empty cells.
-	PointCloudGrid pointCloudGrid(numCells, std::vector<std::vector<Vector3>>(numCells, std::vector<Vector3>()));
+	PointCloudGrid pointCloudGrid(numCellsX, std::vector<std::vector<Vector3>>(numCellsY, std::vector<Vector3>()));
 
 	/*  -----------
 	 * |x  |x  |   |  Group points into cells like this.
@@ -343,20 +451,30 @@ int main()
     // Put points into the correct cell.
     for (const auto& v : vertexDataRaw)
     {
-        int x = static_cast<int>((v.x - bounds.xmin) / stepLengthX);
-        int y = static_cast<int>((v.y - bounds.ymin) / stepLengthY);
+		//std::cout << "y " << v.y << " - " << bounds.ymin << " / " << stepLength << std::endl;
 
-        pointCloudGrid[x][y].emplace_back(v);
+        int x = static_cast<int>(floor(v.x / STEP_LENGTH));
+        int y = static_cast<int>(floor(v.y / STEP_LENGTH));
+
+		// When reaching the point exactly on the edge of the bounds, the index will be out of range.
+		x = std::min(x, numCellsX - 1);
+		y = std::min(y, numCellsY - 1);
+
+		//std::cout << "x: " << v.x << " Steplength: " << stepLength << " xSize: " << bounds.xSize << " Result: " << x << "\n";
+		//std::cout << "x: " << x << " y: " << y << std::endl;
+
+		pointCloudGrid[x][y].emplace_back(v);
     }
 
-	auto vertexGrid = mergeVertices(pointCloudGrid, stepLengthX, stepLengthY);
-
-	std::cout << "Output grid size: " << vertexGrid.size() << "x" << vertexGrid[0].size() << std::endl;
-
+	const auto vertexGrid = mergeVertices(pointCloudGrid, STEP_LENGTH);
 	exportVertexData(vertexGrid, "newVertexData.txt");
 
-	auto indices = generateIndices(vertexGrid);
+	const auto indices = generateIndices(vertexGrid);
 	exportIndexData(indices, "newIndexData.txt");
+
+	std::cout << "Output grid size: " << vertexGrid.size() << "x" << vertexGrid[0].size() << "\n";
+	std::cout << "Number of vertices: " << vertexGrid.size() * vertexGrid[0].size() << "\n";
+	std::cout << "Number of triangles: " << indices.size() / 3 << "\n\n";
 
     return 0;
 }
