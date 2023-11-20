@@ -7,12 +7,11 @@
 // the triangles. It outputs a text file with vertex data, and a text file with index and neighbor data.
 
 
-#include <chrono>
-#include <fstream>
-#include <iomanip>
-#include <string>
 #include <iostream>
+#include <iomanip>
+#include <fstream>
 #include <vector>
+#include <string>
 #include "Timer.h"
 
 
@@ -25,6 +24,13 @@ static constexpr float STEP_LENGTH = 5.f;
 // Flip the y and z coordinates on export. Useful when exporting to e.g. Unity. 
 static constexpr bool FLIP_YZ = true;
 
+// If we should add neighbor data to the index file.
+static constexpr bool GENERATE_NEIGHBORS = true;
+
+/* In case of a cell not containing any vertices, we apply the
+ * height of the last cell to avoid extreme height changes. */
+float lastHeight{};
+
 
 struct Bounds
 {
@@ -36,18 +42,19 @@ struct Vector3
     float x{}, y{}, z{};
 };
 
-/* In case of a cell not containing any vertices, we apply the
- * height of the last cell to avoid extreme height changes. */
-float lastHeight{};
 
 /**
  * \brief A 2D grid of cells, where each cell contains a list (vector) of vertices.
  */
 typedef std::vector<std::vector<std::vector<Vector3>>> PointCloudGrid;
 
+/**
+ * \param fileName Input file name.
+ * \return A vector containing the raw vertex data.
+ */
 std::vector<Vector3> readVertexData(const std::string& fileName)
 {
-	std::cout << "Begin read vertex data" << std::endl;
+	std::cout << "Begin read vertex data\n";
 
 	std::vector<Vector3> vertexData;
 
@@ -56,23 +63,32 @@ std::vector<Vector3> readVertexData(const std::string& fileName)
 	if (!file.is_open())
 		throw std::runtime_error("Could not open given file.");
 
+	Timer t;
+	t.Start();
+
 	Vector3 v;
 	while (file >> v.x >> v.y >> v.z)
 		vertexData.emplace_back(v);
 
     file.close();
 
-	std::cout << "End read vertex data" << std::endl;
+	std::cout << "End read vertex data\n";
+	t.Println();
 
 	return vertexData;
 }
 
 void exportVertexData(const std::vector<std::vector<Vector3>>& vertexData, const std::string& fileName)
 {
+	std::cout << "Start export vertex data\n";
+
 	std::ofstream file(fileName);
 
 	if (!file.is_open())
 		throw std::runtime_error("Could not open the created file.");
+
+	Timer t;
+	t.Start();
 
 	file << vertexData.size() * vertexData[0].size() << "\n";
 
@@ -84,21 +100,45 @@ void exportVertexData(const std::vector<std::vector<Vector3>>& vertexData, const
 				file << SET_PRECISION << j.x << " " << j.y << " " << j.z << "\n";
 
 	file.close();
+
+	std::cout << "End export vertex data\n";
+	t.Println();
 }
 
 void exportIndexData(const std::vector<int>& indexData, const std::string& fileName)
 {
+	std::cout << "Start export index data\n";
+
 	std::ofstream file(fileName);
 
 	if (!file.is_open())
 		throw std::runtime_error("Could not open the created file.");
 
-	file << indexData.size() / 3 << "\n";
+	Timer t;
+	t.Start();
 
-	for (int i = 0; i < indexData.size(); i+= 3)
-		file << indexData[i] << " " << indexData[i+1] << " " << indexData[i+2] <<"\n";
+	if (GENERATE_NEIGHBORS)
+	{
+		file << indexData.size() / 6 << "\n";
+
+		for (int i = 0; i < indexData.size(); i += 6)
+		{
+			file << indexData[i] << " " << indexData[i + 1] << " " << indexData[i + 2] << " ";
+			file << indexData[i + 3] << " " << indexData[i + 4] << " " << indexData[i + 5] << "\n";
+		}
+	}
+	else
+	{
+		file << indexData.size() / 3 << "\n";
+
+		for (int i = 0; i < indexData.size(); i += 3)
+			file << indexData[i] << " " << indexData[i + 1] << " " << indexData[i + 2] << "\n";
+	}
 
 	file.close();
+
+	std::cout << "End export index data\n";
+	t.Println();
 }
 
 /**
@@ -226,14 +266,16 @@ void thinData(const std::string& inFile, const std::string& outFile, int skipLin
 }
 
 /**
- * \brief Generates triangle index information and neighbor
- * information for the given vertex grid.
- * \param vertexData A grid of vertices.
- * \return A compiled list of indices and neighbors for each triangle.
- * Six lines per triangle, where the first three lines are the indices.
+ * \brief Generates triangle index information and optional
+ *  neighbor information for the given vertex grid.
+ * \param vertexData A 2D grid of vertices.
+ * \return A compiled list of indices and optionally neighbors for each triangle.
+ * Three/six array indexes per triangle, where the first three lines are tri indices.
  */
 std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertexData)
 {
+	std::cout << "Begin generate indices\n";
+
 	std::vector<std::vector<int>> indices;
 	std::vector<std::vector<int>> neighbors;
 
@@ -274,10 +316,10 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			if (i == n_x - 1 || j == n_y - 1) continue;
 
 			// Current index
-			int top_left = i * n_y + j;
-			int bottom_left = top_left + 1;
-			int bottom_right = bottom_left + n_y;
-			int top_right = top_left + n_y;
+			const int top_left = i * n_y + j;
+			const int bottom_left = top_left + 1;
+			const int bottom_right = bottom_left + n_y;
+			const int top_right = top_left + n_y;
 
 			/*
 			 * 0---3---6
@@ -304,8 +346,7 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			triangle.emplace_back(top_right);
 
 			indices.emplace_back(triangle);
-
-			continue;
+			
 			//std::cout << "top_left: " << top_left << "\nbottom_left: " << bottom_left << "\nbuttom_right: " << buttom_right << "\ntop_right: " << top_right << std::endl;
 
 			/*
@@ -341,27 +382,23 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			 * -|---|---|---|-
 			 */
 
+			if (!GENERATE_NEIGHBORS) continue;
+
 			constexpr int one_step_down = 2;
 			const int one_step_right = 2 * (n_y - 1);
 
 			// Current triangle index (in the indices array)
-			int T = 2 * (j + i * (n_y - 1));
+			const int T = 2 * (j + i * (n_y - 1));
 
-			int T0 = T + one_step_down + 1; // Second triangle in next square
-			int T1 = T + 1; // Next triangle
-			int T2 = T - one_step_right + 1; // Second triangle in previous column the our left
-			int T3 = T + one_step_right; // First triangle in next column to our right
-			int T4 = T - one_step_down;
+			const int T0 = T + one_step_down + 1; // Second triangle in next square
+			const int T1 = T + 1; // Next triangle
+			const int T2 = T - one_step_right + 1; // Second triangle in previous column the our left
+			const int T3 = T + one_step_right; // First triangle in next column to our right
+			const int T4 = T - one_step_down;
 
-			neighbors.emplace_back();
-			auto& tri_neighbors = neighbors.back();
 
-			// Add neighbor data for the first triangle
-
-			// Check if the neighbor exists
-
-			/* If the j vertex we are on is more than or equal to the one before the last, then there won't be a T0 triangle.
-			 * Similarly, if our i is 0, there won't be a T2 triangle. */
+			// Neighbor data for the first triangle
+			std::vector<int> tri_neighbors;
 
 			/* If our y index is equal or more than the number of vertices
 			 * in the y direction minus one, there won't be a T0 triangle. */
@@ -372,9 +409,8 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			// If our x index is 0, there won't be a T2 triangle.
 			tri_neighbors.emplace_back(i > 0 ? T2 : -1);
 
-
-			neighbors.emplace_back();
-			tri_neighbors = neighbors.back();
+			neighbors.emplace_back(tri_neighbors);
+			tri_neighbors.clear();
 
 			// If our x index is equal or more than the number of vertices in the x direction minus one, there won't be a T3 triangle.
 			tri_neighbors.emplace_back(i < (n_x - 1) ? T3 : -1);
@@ -383,34 +419,45 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			tri_neighbors.emplace_back(j > 0 ? T4 : -1);
 
 			tri_neighbors.emplace_back(T);
+
+			neighbors.emplace_back(tri_neighbors);
 		}
 	}
 
-	t.Println();
+	
 
 	std::vector<int> merged;
-	/*
-	for (int i = 0; i < indices.size(); i++)
-	{
-		merged.insert(merged.end(), indices[i].begin(), indices[i].end());
-		merged.insert(merged.end(), neighbors[i].begin(), neighbors[i].end());
-	}	
 
-	return merged;*/
-
-	for (const auto& tri : indices)
+	if (GENERATE_NEIGHBORS)
 	{
-		merged.insert(merged.end(), tri.begin(), tri.end());
+		for (int i = 0; i < indices.size(); i++)
+		{
+			merged.insert(merged.end(), indices[i].begin(), indices[i].end());
+			merged.insert(merged.end(), neighbors[i].begin(), neighbors[i].end());
+		}
 	}
+	else
+	{
+		for (const auto& tri : indices)
+		{
+			merged.insert(merged.end(), tri.begin(), tri.end());
+		}
+	}
+
+	std::cout << "End generate indices\n";
+	t.Println();
 
 	return merged;
 }
 
 int main()
 {
-	std::cout << "Point Cloud Converter\n";
+	std::cout << " === Point Cloud Converter ===\nhttps://github.com/henriksen-marcus/PointCloudConverter\n\n";
 
-    std::string fileName = "sampleData.txt";
+	Timer t;
+	t.Start();
+
+    std::string fileName = "vertexData.txt";
 	std::vector<Vector3> vertexDataRaw = readVertexData(fileName);
 
 	//thinData(fileName, "thinnedVertexData.txt", 500);
@@ -430,8 +477,10 @@ int main()
 	bounds = findBounds(vertexDataRaw);
 
 	std::cout << "Data bounds:\n";
-	std::cout << SET_PRECISION << "xmin: " << bounds.xmin << " xmax: " << bounds.xmax << "\nymin: " << bounds.ymin << " ymax: " << bounds.ymax << "\n";
-	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << "\n\n";
+	std::cout << SET_PRECISION << "xmin: " << bounds.xmin << " xmax: " << bounds.xmax << "\n";
+	std::cout << SET_PRECISION << "ymin: " << bounds.ymin << " ymax: " << bounds.ymax << "\n";
+	std::cout << SET_PRECISION << "zmin: " << bounds.zmin << " zmax: " << bounds.zmax << "\n";
+	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << " zSize: " << bounds.zSize << "\n";
 
 	// Number of cells in each direction. Determines output vertex resolution.
 	const int numCellsX = static_cast<int>(ceil(bounds.xSize / STEP_LENGTH)+1);
@@ -474,7 +523,8 @@ int main()
 
 	std::cout << "Output grid size: " << vertexGrid.size() << "x" << vertexGrid[0].size() << "\n";
 	std::cout << "Number of vertices: " << vertexGrid.size() * vertexGrid[0].size() << "\n";
-	std::cout << "Number of triangles: " << indices.size() / 3 << "\n\n";
+	std::cout << "Number of triangles: " << indices.size() / (GENERATE_NEIGHBORS ? 6 : 3) << "\n";
+	std::cout << "Total time taken: " << t.Stop() << " seconds\n";
 
     return 0;
 }

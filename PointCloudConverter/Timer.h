@@ -1,6 +1,9 @@
 #pragma once
 #include <chrono>
 
+/**
+ * \brief Simple class for timing code execution.
+ */
 class Timer
 {
 public:
