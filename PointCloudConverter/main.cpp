@@ -25,7 +25,7 @@ static constexpr float STEP_LENGTH = 5.f;
 static constexpr bool FLIP_YZ = true;
 
 // If we should add neighbor data to the index file.
-static constexpr bool GENERATE_NEIGHBORS = true;
+static constexpr bool GENERATE_NEIGHBORS = false;
 
 /* In case of a cell not containing any vertices, we apply the
  * height of the last cell to avoid extreme height changes. */
@@ -189,7 +189,7 @@ float getHeight(const PointCloudGrid& grid, int x, int y)
 		const auto& cell = grid[x][y];
 		if (cell.empty())
 		{
-			//std::cout << "Cell empty.\n";
+			std::cout << "Cell " << x << " " << y << " empty.\n";
 			return lastHeight;
 		}
 
@@ -201,7 +201,7 @@ float getHeight(const PointCloudGrid& grid, int x, int y)
 
 		return height;
 	}
-	catch (std::out_of_range&) {}
+	catch (std::out_of_range&) { throw std::runtime_error(""); }
 
 	return zSum;
 }
@@ -289,10 +289,10 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 	t.Start();
 
 	// X
-	for (int i = 0; i < vertexData.size(); i++)
+	for (int i = 0; i < n_x; i++)
 	{
 		// Y
-		for (int j = 0; j < vertexData[0].size(); j++)
+		for (int j = 0; j < n_y; j++)
 		{
 			/* The plan is to add six indices for each loop.
 			 *
@@ -347,7 +347,7 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 
 			indices.emplace_back(triangle);
 			
-			//std::cout << "top_left: " << top_left << "\nbottom_left: " << bottom_left << "\nbuttom_right: " << buttom_right << "\ntop_right: " << top_right << std::endl;
+			//std::cout << "top_left: " << top_left << "\nbottom_left: " << bottom_left << "\nbottom_right: " << bottom_right << "\ntop_right: " << top_right << std::endl;
 
 			/*
 			 * Generating neighbor data: Overview of the indices for each triangle in the grid.
@@ -366,6 +366,10 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			 * Where the T's represent the index of the triangle in the indices array.
 			 *
 			 * If a neighbor doesn't exist (out of bounds in indices array), we set it to -1.
+			 *
+			 * NOTE: The neighbor data represents the TRIANGLE index, not the vertex index.
+			 * This means that you have to multiply the neighbor by 3 to get the vertex index
+			 * in the indices array.
 			 *
 			 * -|---|---|---|-
 			 *  |\  |\  |\  |
@@ -402,7 +406,7 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 
 			/* If our y index is equal or more than the number of vertices
 			 * in the y direction minus one, there won't be a T0 triangle. */
-			tri_neighbors.emplace_back(j < (n_y - 1) ? T0 : -1);
+			tri_neighbors.emplace_back(j < (n_y - 2) ? T0 : -1);
 
 			tri_neighbors.emplace_back(T1);
 
@@ -412,8 +416,10 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 			neighbors.emplace_back(tri_neighbors);
 			tri_neighbors.clear();
 
+			// Neighbor data for the second triangle
+
 			// If our x index is equal or more than the number of vertices in the x direction minus one, there won't be a T3 triangle.
-			tri_neighbors.emplace_back(i < (n_x - 1) ? T3 : -1);
+			tri_neighbors.emplace_back(i < (n_x - 2) ? T3 : -1);
 
 			// If our y index is 0, there won't be a T4 triangle.
 			tri_neighbors.emplace_back(j > 0 ? T4 : -1);
@@ -450,14 +456,32 @@ std::vector<int> generateIndices(const std::vector<std::vector<Vector3>>& vertex
 	return merged;
 }
 
+void printBounds(const Bounds& bounds)
+{
+	std::cout << "Data bounds:\n";
+	std::cout << SET_PRECISION << "xmin: " << bounds.xmin << " xmax: " << bounds.xmax << "\n";
+	std::cout << SET_PRECISION << "ymin: " << bounds.ymin << " ymax: " << bounds.ymax << "\n";
+	std::cout << SET_PRECISION << "zmin: " << bounds.zmin << " zmax: " << bounds.zmax << "\n";
+	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << " zSize: " << bounds.zSize << "\n";
+}
+
+void printSize(std::string n)
+{
+	auto arr = readVertexData(n);
+	auto b = findBounds(arr);
+	printBounds(b);
+}
+
 int main()
 {
+	/*printSize("newVertexData.txt");
+	return 0;*/
 	std::cout << " === Point Cloud Converter ===\nhttps://github.com/henriksen-marcus/PointCloudConverter\n\n";
 
 	Timer t;
 	t.Start();
 
-    std::string fileName = "vertexData.txt";
+    std::string fileName = "RawData/sampleData.txt";
 	std::vector<Vector3> vertexDataRaw = readVertexData(fileName);
 
 	//thinData(fileName, "thinnedVertexData.txt", 500);
@@ -475,16 +499,11 @@ int main()
 	}
 
 	bounds = findBounds(vertexDataRaw);
-
-	std::cout << "Data bounds:\n";
-	std::cout << SET_PRECISION << "xmin: " << bounds.xmin << " xmax: " << bounds.xmax << "\n";
-	std::cout << SET_PRECISION << "ymin: " << bounds.ymin << " ymax: " << bounds.ymax << "\n";
-	std::cout << SET_PRECISION << "zmin: " << bounds.zmin << " zmax: " << bounds.zmax << "\n";
-	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << " zSize: " << bounds.zSize << "\n";
+	printBounds(bounds);
 
 	// Number of cells in each direction. Determines output vertex resolution.
-	const int numCellsX = static_cast<int>(ceil(bounds.xSize / STEP_LENGTH)+1);
-	const int numCellsY = static_cast<int>(ceil(bounds.ySize / STEP_LENGTH)+1);
+	const int numCellsX = static_cast<int>(ceil(bounds.xSize / STEP_LENGTH));
+	const int numCellsY = static_cast<int>(ceil(bounds.ySize / STEP_LENGTH));
 
 	// Rows and columns, where each cell is a vector of points in that area. Initialize empty cells.
 	PointCloudGrid pointCloudGrid(numCellsX, std::vector<std::vector<Vector3>>(numCellsY, std::vector<Vector3>()));
@@ -515,7 +534,19 @@ int main()
 		pointCloudGrid[x][y].emplace_back(v);
     }
 
-	const auto vertexGrid = mergeVertices(pointCloudGrid, STEP_LENGTH);
+	auto vertexGrid = mergeVertices(pointCloudGrid, STEP_LENGTH);
+
+	// Scale the grid back to the original size.
+	float scaleFactor = (STEP_LENGTH * numCellsX) / ((STEP_LENGTH * numCellsX - 1));
+
+	/*for (auto& i : vertexGrid)
+		for (auto& j : i)
+		{
+			j.x *= scaleFactor;
+			j.y *= scaleFactor;
+			j.z *= scaleFactor;
+		}*/
+
 	exportVertexData(vertexGrid, "newVertexData.txt");
 
 	const auto indices = generateIndices(vertexGrid);
