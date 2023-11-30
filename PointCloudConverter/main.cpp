@@ -19,13 +19,13 @@ static constexpr int DECIMAL_PRECISION = 4;
 #define SET_PRECISION std::fixed << std::setprecision(DECIMAL_PRECISION)
 
 // Distance between each cell wall. Configure this to change the output mesh resolution.
-static constexpr float STEP_LENGTH = 5.f;
+static constexpr float STEP_LENGTH = 15.f;
 
 // Flip the y and z coordinates on export. Useful when exporting to e.g. Unity. 
 static constexpr bool FLIP_YZ = true;
 
 // If we should add neighbor data to the index file.
-static constexpr bool GENERATE_NEIGHBORS = false;
+static constexpr bool GENERATE_NEIGHBORS = true;
 
 /* In case of a cell not containing any vertices, we apply the
  * height of the last cell to avoid extreme height changes. */
@@ -465,30 +465,25 @@ void printBounds(const Bounds& bounds)
 	std::cout << SET_PRECISION << "xSize: " << bounds.xSize << " ySize: " << bounds.ySize << " zSize: " << bounds.zSize << "\n";
 }
 
-void printSize(std::string n)
+void printSize(const std::string& file)
 {
-	auto arr = readVertexData(n);
-	auto b = findBounds(arr);
-	printBounds(b);
+	printBounds(findBounds(readVertexData(file)));
 }
 
 int main()
 {
-	/*printSize("newVertexData.txt");
-	return 0;*/
 	std::cout << " === Point Cloud Converter ===\nhttps://github.com/henriksen-marcus/PointCloudConverter\n\n";
 
 	Timer t;
 	t.Start();
 
-    std::string fileName = "RawData/sampleData.txt";
+    std::string fileName = "RawData/vertexData.txt";
 	std::vector<Vector3> vertexDataRaw = readVertexData(fileName);
 
 	//thinData(fileName, "thinnedVertexData.txt", 500);
 	//return 0;
 
 	Bounds bounds = findBounds(vertexDataRaw);
-	//const Vector3 offset = vertexDataRaw[0];
 
 	// Remove world offset
 	for (auto& v : vertexDataRaw)
@@ -539,13 +534,13 @@ int main()
 	// Scale the grid back to the original size.
 	float scaleFactor = (STEP_LENGTH * numCellsX) / ((STEP_LENGTH * numCellsX - 1));
 
-	/*for (auto& i : vertexGrid)
+	for (auto& i : vertexGrid)
 		for (auto& j : i)
 		{
 			j.x *= scaleFactor;
 			j.y *= scaleFactor;
 			j.z *= scaleFactor;
-		}*/
+		}
 
 	exportVertexData(vertexGrid, "newVertexData.txt");
 
